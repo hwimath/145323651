@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>무리수와 실수, 실수와 수직선</title>
+  <!-- MathJax 불러오기 (LaTeX 렌더링) -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+
+  <style>
+    /* 흑백 테마 */
+    body {
+      margin: 0; padding: 0;
+      background-color: #000;
+      color: #fff;
+      font-family: sans-serif;
+    }
+    #container {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+    h1, h2, h3 {
+      text-align: center;
+    }
+    .center {
+      text-align: center;
+    }
+    .hidden {
+      display: none;
+    }
+    button {
+      background-color: #fff;
+      color: #000;
+      border: none;
+      padding: 0.5rem 1rem;
+      margin: 0.2rem;
+      cursor: pointer;
+    }
+    #difficultyMenu, #quizScreen, #endScreen {
+      margin-top: 1rem;
+    }
+
+    /* 에너지바(시간바) 스타일: 너비가 줄어드는 효과만 */
+    #energyBarContainer {
+      width: 100%;
+      background-color: #aaa;
+      height: 10px;
+      margin-bottom: 1rem;
+      position: relative;
+    }
+    #energyBar {
+      position: absolute;
+      left: 0; top: 0;
+      height: 10px;
+      background-color: #000;
+      width: 100%; /* 처음엔 100%에서 출발 */
+      transition: width linear;
+    }
+
+    /* 문제 영역 스타일 */
+    #questionText {
+      margin: 1rem 0;
+      min-height: 60px;
+    }
+    .choice-btn {
+      display: inline-block;
+      margin: 0.5rem;
+      padding: 0.5rem 1rem;
+      background-color: #fff;
+      color: #000;
+      cursor: pointer;
+      text-align: center;
+    }
+    .choice-btn:hover {
+      background-color: #ccc;
+    }
+
+    /* 결과/정답 표시 */
+    #feedback {
+      margin: 0.5rem 0;
+      font-weight: bold;
+    }
+
+    /* 점수/남은 기회 등 표시 */
+    #infoBar {
+      margin: 0.5rem 0;
+    }
+    #infoBar span {
+      margin-right: 1rem;
+    }
+
+    /* 서버 응답 메시지 표시 */
+    #response {
+      white-space: pre-wrap;
+      margin-top: 1rem;
+      background-color: #fff;
+      color: #000;
+      padding: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+<div id="container">
+
+  <h1>무리수와 실수, 실수와 수직선</h1>
+
+  <!-- 0. 첫 화면(이름 입력, 난이도 선택) -->
+  <div id="introScreen">
+    <div class="center">
+      <label for="playerName">이름 입력:</label><br>
+      <input type="text" id="playerName" placeholder="예: 홍길동">
+    </div>
+    <div id="difficultyMenu" class="center">
+      <p>난이도를 선택하세요.</p>
+      <button onclick="startGame('최상')">최상(20초)</button>
+      <button onclick="startGame('상')">상(30초)</button>
+      <button onclick="startGame('중')">중(40초)</button>
+      <button onclick="startGame('하')">하(시간제한 없음)</button>
+    </div>
+  </div>
+
+  <!-- 퀴즈 화면 -->
+  <div id="quizScreen" class="hidden">
+    <!-- 전체 게임 시간 표시 -->
+    <div id="totalTimeDisplay" class="center"></div>
+
+    <!-- 남은 기회/점수/문제번호 등 정보 표시 -->
+    <div id="infoBar" class="center">
+      <span id="chanceDisplay"></span>
+      <span id="scoreDisplay"></span>
+    </div>
+
+    <!-- 에너지바(시간바) -->
+    <div id="energyBarContainer">
+      <div id="energyBar"></div>
+    </div>
+
+    <!-- 문제/선택지 -->
+    <div id="questionText"></div>
+    <div id="choiceContainer" class="center"></div>
+
+    <!-- 정답/피드백 표시 -->
+    <div id="feedback" class="center"></div>
+  </div>
+
+  <!-- 게임 종료 화면 -->
+  <div id="endScreen" class="hidden center">
+    <h2>게임 종료</h2>
+    <p id="finalScore"></p>
+    <!-- 점수 전송 버튼 & 응답 표시 -->
+    <button onclick="sendScore()">점수전송</button>
+    <div id="response"></div>
+  </div>
+</div>
+
+<script>
+/* 
+  1) 모든 문제(1~18, 31~53)를 2지선다로 구성
+  2) 난이도별 시간 제한(최상=20초, 상=30초, 중=40초, 하=무제한)
+  3) 에너지바 0이 되면 기회 1 감소 + 문제 정답 공개 후 다음 문제
+  4) 한 번 틀릴 때마다 기회 1 감소 (3회 틀리면 종료)
+  5) 모든 문제 다 푼 후 무한 반복(랜덤) 출제
+  6) 틀리면 즉시 정답 표시
+  7) MathJax.typeset() 으로 동적 수식 렌더링
+  8) 전체 게임 시간도 실시간 표시
+  9) 흑백색 배색
+*/
+
+/* ---------------------
+   1. 문제 데이터 (총 41문항)
+   --------------------- */
+const allQuestions = [
+  // (1~18) "다음 수는 유리수인가 무리수인가?" (선택: 유/무)
+  {
+    statement: "다음 수 \\(\\sqrt{5}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(\\sqrt{5}\\)는 무리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{9}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (\\(\\sqrt{9} = 3\\)은 유리수)"
+  },
+  {
+    statement: "다음 수 \\(\\pi\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(\\pi\\)는 무리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{0.04}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (\\(\\sqrt{0.04} = 0.2\\)은 유리수)"
+  },
+  {
+    statement: "다음 수 \\(1.6\\)은(는) 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (유한소수는 유리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{4.9}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(4.9 = 4.9\\) => \\(\\sqrt{4.9}\\)은 무리수)"
+  },
+  {
+    statement: "다음 수 \\(\\dfrac{\\pi}{2}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(\\pi\\)가 무리수이므로 \\(\\pi/2\\)도 무리수)"
+  },
+  {
+    statement: "다음 수 \\(0.141414\\ldots\\) (반복소수)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (반복소수는 유리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{20}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(\\sqrt{4*5} = 2\\sqrt{5}\\) => 무리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{49}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (\\(\\sqrt{49} = 7\\)은 유리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{(-5)^2}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (\\((-5)^2 = 25\\) 이므로 \\(\\sqrt{25} = 5\\) → 유리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{\\dfrac{1}{5}}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(\\sqrt{1/5} = \\sqrt{0.2}\\)은 무리수)"
+  },
+  {
+    statement: "다음 수 (재확인) \\(\\sqrt{0.04}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (위와 동일: 0.2)"
+  },
+  {
+    statement: "다음 수 \\(-\\sqrt{0.4}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(\\sqrt{0.4}\\)는 무리수이므로 음수여도 무리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{\\dfrac{9}{16}}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 0, // 유
+    explanation: "정답: 유 (\\(\\sqrt{9/16} = 3/4\\) → 유리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{1.2}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(1.2=6/5\\), \\(\\sqrt{6/5}\\)은 무리수)"
+  },
+  {
+    statement: "다음 수 \\(2.31213\\ldots\\) (비순환으로 가정)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (비순환소수라면 무리수)"
+  },
+  {
+    statement: "다음 수 \\(\\sqrt{\\dfrac{25}{5}}\\)는 유리수인가 무리수인가?",
+    choices: ["유", "무"],
+    correctIndex: 1, // 무
+    explanation: "정답: 무 (\\(\\sqrt{25/5} = \\sqrt{5}\\)은 무리수)"
+  },
+
+  // (31~53) "다음 문장이 옳은가, 옳지 않은가?" (선택: ○/×)
+  {
+    statement: "“근호가 있는 수는 모두 무리수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (예: \\(\\sqrt{9} = 3\\) 은 유리수)"
+  },
+  {
+    statement: "“무한소수는 모두 무리수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (반복소수 0.333... 등은 유리수)"
+  },
+  {
+    statement: "“\\(0.\\overline{14}\\)는 수직선 위의 한 점에 대응한다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (모든 소수 확장은 수직선 위 한 점에 대응)"
+  },
+  {
+    statement: "“\\(\\dfrac{1}{3}\\)과 \\(\\dfrac{1}{4}\\) 사이에는 무리수가 존재하지 않는다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (서로 다른 유리수 사이에도 무리수 무한히 많음)"
+  },
+  {
+    statement: "“\\(\\sqrt{7}\\)과 \\(\\sqrt{8}\\) 사이에는 무수히 많은 유리수가 존재한다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (유리수는 두 무리수 사이에도 무한히 많음)"
+  },
+  {
+    statement: "“수직선은 유리수의 점들만으로 완전히 메울 수 있다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (무리수도 존재하므로 유리수만으로는 부족)"
+  },
+  {
+    statement: "“유리수와 무리수를 합쳐서 실수라고 한다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○"
+  },
+  {
+    statement: "“서로 다른 두 유리수 사이에는 무수히 많은 무리수가 존재한다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○"
+  },
+  {
+    statement: "“모든 실수는 수직선 위의 한 점에 대응한다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○"
+  },
+  {
+    statement: "“\\(\\sqrt{5}\\)는 실수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (\\(\\sqrt{5}\\)는 무리수이자 실수)"
+  },
+  {
+    statement: "“\\(\\sqrt{7}\\)은 순환하지 않는 무한소수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (\\(\\sqrt{7}\\)은 비순환 소수 전개)"
+  },
+  {
+    statement: "“순환소수는 모두 유리수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○"
+  },
+  {
+    statement: "“무한소수 중에는 유리수인 것도 있다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (0.123123...처럼 반복소수)"
+  },
+  {
+    statement: "“0은 유리수이면서 동시에 무리수이기도 하다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (0은 유리수이지만 무리수는 아님)"
+  },
+  {
+    statement: "“유리수는 모두 분수(정수/정수)로 나타낼 수 있다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○"
+  },
+  {
+    statement: "“무리수는 (정수/정수) 꼴로 나타낼 수 없다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○"
+  },
+  {
+    statement: "“근호를 사용해 나타낸 수는 모두 무리수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (\\(\\sqrt{100}=10\\) 등 유리수도 존재)"
+  },
+  {
+    statement: "“\\(\\sqrt{100}\\)은 유리수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (\\(\\sqrt{100}=10\\))"
+  },
+  {
+    statement: "“무한소수는 모두 무리수이다.” (재등장) 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (같은 이유)"
+  },
+  {
+    statement: "“\\(\\sqrt{11}\\)은 실수가 아니다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (\\(\\sqrt{11}\\)은 무리수이자 실수)"
+  },
+  {
+    statement: "“무한소수는 모두 무리수이다.” (세 번째) 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 1,
+    explanation: "정답: × (반복소수는 유리수)"
+  },
+  {
+    statement: "“소수(小數)는 유한소수와 순환소수로 이루어져 있다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (중학교 정의 기준)"
+  },
+  {
+    statement: "“실수 중 유리수가 아닌 수는 모두 무리수이다.” 이 명제는 옳을까요?",
+    choices: ["○", "×"],
+    correctIndex: 0,
+    explanation: "정답: ○ (유리수와 무리수는 실수를 양분)"
+  }
+];
+
+/* ---------------------
+   2. 전역 변수들
+   --------------------- */
+let quizIndex = 0;       // 현재 문항 인덱스
+let score = 0;           // 점수
+let chance = 3;          // 남은 기회(3회)
+let totalElapsed = 0;    // 전체 경과 시간(초)
+let gameTimer = null;    // 전체 타이머
+let energyTimer = null;  // 문제별 타이머(에너지바)
+let energyDuration = 0;  // 문제별 시간(초), 난이도에 따라 설정
+let isEndlessMode = false; // 모든 문제를 한 바퀴 돈 뒤부터 true
+let usedIndices = [];    // 이미 출제한 문제 인덱스 목록
+
+// 난이도별 배점
+const scoreMap = {
+  "최상": 20,
+  "상": 15,
+  "중": 13,
+  "하": 10
+};
+
+// 난이도별 제한시간
+const timeMap = {
+  "최상": 20,
+  "상": 30,
+  "중": 40,
+  "하": 0  // 0이면 시간제한 없음
+};
+
+// 문제 배열 전체를 섞어두어도 되고,
+// 아니면 필요할 때마다 무작위로 뽑아도 됩니다.
+// 여기는 무한출제도 해야 하므로, 일단 순서를 섞어놓고, 일단 한 바퀴 도는 방식을 택합니다.
+function shuffleArray(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+}
+
+// 초기에 문제 순서를 섞습니다.
+shuffleArray(allQuestions);
+
+/* ---------------------
+   3. 게임 시작
+   --------------------- */
+function startGame(difficulty) {
+  const nameField = document.getElementById("playerName");
+  if (!nameField.value.trim()) {
+    alert("이름을 입력해주세요!");
+    return;
+  }
+
+  // 난이도별 시간, 배점 세팅
+  energyDuration = timeMap[difficulty];
+
+  // 화면 전환
+  document.getElementById("introScreen").classList.add("hidden");
+  document.getElementById("quizScreen").classList.remove("hidden");
+
+  // 전체 타이머 시작
+  startTotalTimer();
+
+  // 초기 상태
+  quizIndex = 0;
+  score = 0;
+  chance = 3;
+  isEndlessMode = false;
+  usedIndices = [];
+
+  // 첫 문제 표시
+  showQuestion(difficulty);
+}
+
+/* 전체 시간 타이머 */
+function startTotalTimer() {
+  totalElapsed = 0;
+  if (gameTimer) clearInterval(gameTimer);
+  gameTimer = setInterval(() => {
+    totalElapsed++;
+    document.getElementById("totalTimeDisplay").innerText = "전체 경과 시간: " + totalElapsed + "초";
+  }, 1000);
+}
+
+/* ---------------------
+   4. 문제 표시 로직
+   --------------------- */
+function showQuestion(difficulty) {
+  // 남은 기회/점수 갱신
+  updateInfoBar(difficulty);
+
+  let questionObj = null;
+
+  if (!isEndlessMode) {
+    // 아직 1회전 중
+    if (quizIndex < allQuestions.length) {
+      questionObj = allQuestions[quizIndex];
+    } else {
+      // 모두 풀었으니 무한 반복 모드로
+      isEndlessMode = true;
+    }
+  }
+
+  if (isEndlessMode) {
+    // 무한 반복 모드: 아무 문제나 랜덤으로 뽑기
+    const randIndex = Math.floor(Math.random() * allQuestions.length);
+    questionObj = allQuestions[randIndex];
+  }
+
+  // 문제 세팅
+  document.getElementById("feedback").innerText = "";
+  document.getElementById("questionText").innerHTML = questionObj.statement;
+
+  // 보기 표시
+  const choiceContainer = document.getElementById("choiceContainer");
+  choiceContainer.innerHTML = "";
+  
+  // 무작위로 보기를 섞고 싶다면(2지선다이긴 하지만)…
+  // 굳이 섞을 필요가 없을 수도 있지만 예시로:
+  let cArr = [...questionObj.choices];
+  let originalIndex = questionObj.correctIndex; 
+  // 2지 선다이므로 shuffle해도 정답 매핑이 중요...
+  // 여기서는 그대로 "유, 무" or "○, ×" 순서대로 두겠습니다.
+
+  cArr.forEach((choiceText, idx) => {
+    const btn = document.createElement("button");
+    btn.className = "choice-btn";
+    btn.innerText = choiceText;
+    btn.onclick = () => checkAnswer(idx, questionObj, difficulty);
+    choiceContainer.appendChild(btn);
+  });
+
+  // MathJax 렌더링
+  MathJax.typeset();
+
+  // 에너지바 시작
+  startEnergyBar(difficulty);
+}
+
+/* 에너지바(시간 제한) 동작 */
+function startEnergyBar(difficulty) {
+  // 먼저 이전 타이머가 있다면 제거
+  if (energyTimer) clearTimeout(energyTimer);
+
+  const bar = document.getElementById("energyBar");
+  // 난이도가 '하'인 경우 시간제한 없음 → 바 고정
+  if (energyDuration === 0 && difficulty === "하") {
+    bar.style.width = "100%";
+    return; 
+  }
+
+  // bar를 100% -> 0%로 animation
+  bar.style.transition = "none";
+  bar.style.width = "100%";
+
+  // reflow
+  bar.getBoundingClientRect();
+
+  // 다시 transition
+  bar.style.transition = `width ${energyDuration}s linear`;
+  bar.style.width = "0%";
+
+  // energyDuration 후에 기회 차감 + 정답표시 + 다음문제로
+  energyTimer = setTimeout(() => {
+    // 시간 초과
+    chance--;
+    document.getElementById("feedback").innerText = "시간 초과! 정답을 놓쳤습니다. (기회 1 감소)";
+    checkGameOver();
+    // 정답도 보여주고 바로 넘어감
+    setTimeout(() => {
+      nextQuestion();
+    }, 1000);
+  }, energyDuration * 1000);
+}
+
+/* 정답 체크 */
+function checkAnswer(chosenIndex, questionObj, difficulty) {
+  // 시간이남아도 즉시 에너지바 정지
+  if (energyTimer) {
+    clearTimeout(energyTimer);
+    energyTimer = null;
+  }
+
+  const isCorrect = (chosenIndex === questionObj.correctIndex);
+  if (isCorrect) {
+    // 정답
+    score += scoreMap[difficulty];
+    document.getElementById("feedback").innerText = "정답입니다! +" + scoreMap[difficulty] + "점";
+  } else {
+    // 오답
+    chance--;
+    document.getElementById("feedback").innerText = "오답입니다! " + questionObj.explanation + " (기회 1 감소)";
+  }
+
+  updateInfoBar(difficulty);
+  checkGameOver();
+
+  // 잠깐 정답/피드백 보여주고 다음 문제로
+  setTimeout(() => {
+    nextQuestion();
+  }, 1000);
+}
+
+function nextQuestion() {
+  if (!isEndlessMode) {
+    quizIndex++;
+  }
+  // 이미 종료상태면 빠져나가기
+  if (chance <= 0) return;
+  showQuestion(getCurrentDifficulty());
+}
+
+/* 남은 기회/점수 표시 */
+function updateInfoBar(difficulty) {
+  document.getElementById("chanceDisplay").innerText = "남은 기회: " + chance;
+  document.getElementById("scoreDisplay").innerText = "점수: " + score + " (난이도: " + difficulty + ")";
+}
+
+/* 현재 난이도 얻기(여기선 energyDuration값으로 구분) */
+function getCurrentDifficulty() {
+  if (energyDuration === 20) return "최상";
+  if (energyDuration === 30) return "상";
+  if (energyDuration === 40) return "중";
+  return "하";
+}
+
+/* 3회(기회 0)면 게임 종료 */
+function checkGameOver() {
+  if (chance <= 0) {
+    endGame();
+  }
+}
+
+/* ---------------------
+   5. 게임 종료
+   --------------------- */
+function endGame() {
+  // 타이머 정리
+  if (gameTimer) clearInterval(gameTimer);
+  if (energyTimer) clearTimeout(energyTimer);
+
+  // 퀴즈 화면 감추기
+  document.getElementById("quizScreen").classList.add("hidden");
+  // 종료 화면 표시
+  document.getElementById("endScreen").classList.remove("hidden");
+  document.getElementById("finalScore").innerText = "최종 점수: " + score + " / 총 경과시간: " + totalElapsed + "초";
+}
+
+/* ---------------------
+   6. 점수 전송 (서버)
+   --------------------- */
+function sendScore() {
+  const playerName = document.getElementById("playerName").value.trim();
+  const gameName = "무리수와 실수, 실수와 수직선";
+  saveData(gameName, playerName, score, totalElapsed);
+}
+
+/* ---------------------
+   7. 제공된 saveData 함수
+   --------------------- */
+async function saveData(game, name, score, elapsedTime) {
+  const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+  const requestData = {
+    game,
+    name,
+    score: parseInt(score, 10),
+    elapsedTime: parseInt(elapsedTime, 10)
+  };
+
+  try {
+    const response = await fetch(FUNCTION_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestData)
+    });
+
+    const responseData = await response.json();
+
+    if (response.ok) {
+      document.getElementById('response').innerText =
+          "성공: " + JSON.stringify(responseData, null, 2);
+    } else {
+      document.getElementById('response').innerText =
+          "오류: " + JSON.stringify(responseData, null, 2);
+    }
+  } catch (error) {
+    console.error('요청 실패:', error);
+    document.getElementById('response').innerText =
+        "네트워크 오류: " + error.message;
+  }
+}
+</script>
+</body>
+</html>
